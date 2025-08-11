@@ -1,75 +1,66 @@
-import random
-from langchain_groq import ChatGroq
-from langchain.prompts import ChatPromptTemplate
-from langchain.tools import tool
-from dotenv import load_dotenv
 import os
+import operator
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_core.messages import BaseMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from typing import TypedDict, Annotated, List
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import InMemorySaver
 
 load_dotenv()
 
+# --- Agent Configuration ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MODEL_NAME = "llama3-70b-8192"
+AGENT_NAME = "Customer Support"
 
-class CustomerSupportAgent:
-    def __init__(self, llm_client):
-        self.llm_client = llm_client
+# --- Tool Definition ---
+class CustomerSupportSchema(BaseModel):
+    problem_description: str = Field(description="A detailed description of the customer's issue.")
+    product_name: str = Field(description="The name of the product or service the customer is using.")
 
-    def resolve_customer_issue(self, problem_description: str, product_name: str = 'our service') -> str:
-        """Addresses a customer's problem by providing a solution or escalating to a human agent."""
-        if not problem_description:
-            return "[Error] No problem description found. Please describe your issue."
+@tool(args_schema=CustomerSupportSchema)
+def customer_issue_resolver_tool(problem_description: str, product_name: str = 'our service') -> str:
+    """Addresses a customer's problem by providing a solution or escalating to a human agent."""
+    llm = ChatGroq(temperature=0.7, model_name=MODEL_NAME, max_tokens=400)
+    
+    prompt_string = (
+        "You are a friendly and knowledgeable customer support representative.\n"
+        "Your goal is to help the user solve their problem with '{product_name}'.\n\n"
+        "1. Acknowledge their problem with empathy.\n"
+        "2. Provide a clear, step-by-step solution if possible.\n"
+        "3. If you cannot solve it, politely explain and provide an instruction to contact human support at 'support@example.com'.\n\n"
+        "Customer's Problem:\n\"{problem_description}\""
+    )
 
-        prompt_string = (
-            "You are a friendly, patient, and knowledgeable customer support representative for a company.\n"
-            "Your goal is to help the user solve their problem with '{product_name}'.\n\n"
-            "1. Start by acknowledging their problem and showing empathy.\n"
-            "2. Provide a clear, step-by-step solution if possible.\n"
-            "3. If the problem is complex or you cannot solve it, politely explain that you cannot resolve the issue "
-            "and provide a generic instruction to contact the human support team via 'support@example.com'.\n"
-            "4. Keep your response concise and easy to follow.\n\n"
-            "Customer's Problem:\n\"{problem_description}\""
-        )
+    prompt = ChatPromptTemplate.from_template(prompt_string)
+    chain = prompt | llm
+    response = chain.invoke({"problem_description": problem_description, "product_name": product_name})
+    return response.content.strip()
 
-        prompt = ChatPromptTemplate.from_template(prompt_string)
-        chain = prompt | self.llm_client
+# --- Agent Setup ---
+tools = [customer_issue_resolver_tool]
+model = ChatGroq(temperature=0, groq_api_key=GROQ_API_KEY, model_name=MODEL_NAME)
 
-        try:
-            response = chain.invoke({
-                "problem_description": problem_description,
-                "product_name": product_name
-            })
-            return response.content.strip()
-        except Exception as e:
-            error_msgs = [
-                "I'm sorry, I'm having trouble connecting to our systems right now. Please try again in a moment.",
-                f"An unexpected error occurred: {str(e)}"
-            ]
-            return random.choice(error_msgs)
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], operator.add]
+    remaining_steps: int  # <-- THIS LINE WAS ADDED
 
-def initialize_groq_client():
-    try:
-        return ChatGroq(
-            temperature=0.7,
-            groq_api_key=GROQ_API_KEY,
-            model_name=MODEL_NAME,
-            max_tokens=400
-        )
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize Groq client: {e}")
-        return None
+customer_support_agent = create_react_agent(
+    model,
+    tools,
+    state_schema=AgentState,
+    checkpointer=InMemorySaver(),
+)
 
 if __name__ == '__main__':
-    print("Welcome to the AI Customer Support Agent")
-    print("Tell me your issue and I’ll try to help you out!\n")
-
-    issue = input("Describe your problem: ").strip()
-    product = input("What product or service is this related to? (press enter for 'our service'): ").strip()
-    if not product:
-        product = "our service"
-
-    groq_client = initialize_groq_client()
-    if groq_client:
-        support_agent = CustomerSupportAgent(llm_client=groq_client)
-        reply = support_agent.resolve_customer_issue(problem_description=issue, product_name=product)
-        print("\nSupport Response:\n")
-        print(reply)
+    from langchain_core.messages import HumanMessage
+    print(f"Testing the {AGENT_NAME} Agent...")
+    result = customer_support_agent.invoke(
+        {"messages": [HumanMessage(content="My account is locked and I can't reset the password. I'm using the 'Pro Plan'.")]}
+    )
+    print("--- Response ---")
+    print(result['messages'][-1].content)

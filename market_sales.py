@@ -1,77 +1,69 @@
-import random
-from langchain_groq import ChatGroq
-from langchain.prompts import ChatPromptTemplate
-from langchain.tools import tool
-from dotenv import load_dotenv
 import os
+import operator
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_core.messages import BaseMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from typing import TypedDict, Annotated, List
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import InMemorySaver
 
 load_dotenv()
 
+# --- Agent Configuration ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MODEL_NAME = "llama3-70b-8192"
+AGENT_NAME = "Marketing & Sales"
 
-class MarketingSalesAgent:
-    def __init__(self, llm_client):
-        self.llm_client = llm_client
+# --- Tool Definition ---
+class MarketingPitchSchema(BaseModel):
+    user_need: str = Field(description="The customer's stated need or problem.")
+    product_name: str = Field(description="The name of the product.")
+    product_description: str = Field(description="A brief description of the product.")
 
-    def generate_marketing_pitch(self, user_need: str, product_name: str, product_description: str) -> str:
-        """Generates a persuasive marketing message connecting a user's need to a product."""
-        if not all([user_need, product_name, product_description]):
-            return "[Error] Missing required information. Please provide user need, product name, and description."
+@tool(args_schema=MarketingPitchSchema)
+def marketing_pitch_tool(user_need: str, product_name: str, product_description: str) -> str:
+    """Generates a persuasive marketing message connecting a user's need to a product."""
+    llm = ChatGroq(temperature=0.8, model_name=MODEL_NAME, max_tokens=300)
 
-        prompt_string = (
-            "You are a persuasive and helpful AI marketing assistant. Your goal is to show how a product is the perfect solution for a customer's needs.\n\n"
-            "**Product Information:**\n"
-            "- Product Name: {product_name}\n"
-            "- Product Description: {product_description}\n\n"
-            "**Customer's Stated Need:**\n"
-            "\"{user_need}\"\n\n"
-            "**Your Task:**\n"
-            "Write a short, engaging, and persuasive message (under 150 words). Address the customer's need directly. "
-            "Focus on the *benefits* of the product, not just its features. Be enthusiastic but not overly aggressive. "
-            "End with a clear and friendly call-to-action, like inviting them to a website or to ask another question."
-        )
+    prompt_string = (
+        "You are a persuasive AI marketing assistant.\n"
+        "Product Name: {product_name}\n"
+        "Product Description: {product_description}\n"
+        "Customer's Need: \"{user_need}\"\n\n"
+        "Your Task: Write a short, engaging message (under 150 words). Address the customer's need directly. "
+        "Focus on benefits, not just features. End with a clear call-to-action."
+    )
 
-        prompt = ChatPromptTemplate.from_template(prompt_string)
-        chain = prompt | self.llm_client
+    prompt = ChatPromptTemplate.from_template(prompt_string)
+    chain = prompt | llm
+    response = chain.invoke({
+        "user_need": user_need, "product_name": product_name, "product_description": product_description
+    })
+    return response.content.strip()
 
-        try:
-            response = chain.invoke({
-                "user_need": user_need,
-                "product_name": product_name,
-                "product_description": product_description
-            })
-            return response.content.strip()
-        except Exception as e:
-            error_msgs = [
-                "I'm sorry, our marketing-tron 5000 is on a coffee break. Please try again shortly.",
-                f"An unexpected error occurred: {str(e)}"
-            ]
-            return random.choice(error_msgs)
+# --- Agent Setup ---
+tools = [marketing_pitch_tool]
+model = ChatGroq(temperature=0, groq_api_key=GROQ_API_KEY, model_name=MODEL_NAME)
 
-def initialize_groq_client():
-    try:
-        return ChatGroq(
-            temperature=0.8,
-            groq_api_key=GROQ_API_KEY,
-            model_name=MODEL_NAME,
-            max_tokens=300
-        )
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize Groq client: {e}")
-        return None
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], operator.add]
+    remaining_steps: int  # <-- THIS LINE WAS ADDED
+
+marketing_sales_agent = create_react_agent(
+    model,
+    tools,
+    state_schema=AgentState,
+    checkpointer=InMemorySaver(),
+)
 
 if __name__ == '__main__':
-    print("Welcome to the AI Marketing & Sales Assistant")
-    print("Let's craft a persuasive pitch for your product!\n")
-
-    user_need = input("What is the user's need or problem? ").strip()
-    product_name = input("What is the name of the product? ").strip()
-    product_description = input("Describe the product briefly: ").strip()
-
-    groq_client = initialize_groq_client()
-    if groq_client:
-        sales_agent = MarketingSalesAgent(llm_client=groq_client)
-        pitch = sales_agent.generate_marketing_pitch(user_need=user_need, product_name=product_name, product_description=product_description)
-        print("\nGenerated Marketing Pitch:\n")
-        print(pitch)
+    from langchain_core.messages import HumanMessage
+    print(f"Testing the {AGENT_NAME} Agent...")
+    result = marketing_sales_agent.invoke({
+        "messages": [HumanMessage(content="I need a tool to automate my social media posts. The product is called 'SocialScheduler' and it auto-posts to Twitter, Instagram, and Facebook.")]
+    })
+    print("--- Response ---")
+    print(result['messages'][-1].content)
