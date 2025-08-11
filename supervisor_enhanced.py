@@ -7,7 +7,6 @@ import aiohttp
 from dotenv import load_dotenv
 from typing import TypedDict, Annotated, List, Optional, Dict, Any
 
-# --- Core LangChain and LangGraph Imports ---
 from langchain_groq import ChatGroq
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
@@ -17,7 +16,6 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-# --- MCP Client Imports (using mcp package) ---
 try:
     import mcp
     from mcp.client.session import ClientSession
@@ -27,15 +25,12 @@ except ImportError:
     print(" MCP package not available. Install with: pip install mcp")
     MCP_AVAILABLE = False
 
-# --- Load Environment Variables ---
 load_dotenv()
 
-# --- Global Configurations ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 
-# SPEED OPTIMIZATION: Use a small, fast model for routing and a large, powerful model for generation.
 ROUTER_MODEL = "llama3-8b-8192"
 GENERATION_MODEL = "llama3-70b-8192"
 
@@ -137,21 +132,18 @@ class FastNewsClient:
         if not self._initialized:
             await self.initialize()
         
-        # Try NewsAPI first (usually fastest for news)
         if NEWS_API_KEY:
             print(" Searching NewsAPI...")
             result = await self.search_news_newsapi(query, max_results)
             if "error" not in result.lower() and "failed" not in result.lower():
                 return result
         
-        # Fallback to Brave Search
         if BRAVE_API_KEY:
             print("Fallback to Brave Search...")
             result = await self.search_brave(query, max_results)
             if "error" not in result.lower() and "failed" not in result.lower():
                 return result
         
-        # Last resort: return a message about configuration
         return ("No news APIs configured. Please add NEWS_API_KEY or BRAVE_API_KEY to your .env file.\n" 
                "- NewsAPI: https://newsapi.org/\n" 
                "- Brave Search: https://api.search.brave.com/")
@@ -159,7 +151,6 @@ class FastNewsClient:
     async def get_real_time_data(self, topic: str, data_type: str = "general") -> str:
         """Get real-time data with topic-specific optimization"""
         
-        # Customize search based on data type for better results
         if data_type == "health":
             query = f"{topic} medical research study latest findings"
         elif data_type == "tech":
@@ -179,7 +170,6 @@ class FastNewsClient:
             await self.session.close()
             print(" News client connections closed")
 
-# Global news client instance
 news_client = FastNewsClient()
 
 
@@ -187,7 +177,6 @@ async def run_content_generation(query: str, content_type: str, context: str | N
     """Content generation with fast real-time data"""
     llm = ChatGroq(temperature=0.7, model_name=GENERATION_MODEL)
     
-    # Get real-time context if keywords suggest recent information
     if not context and any(keyword in query.lower() for keyword in ["latest", "recent", "news", "current", "today", "2024", "2025"]):
         print(" Fetching real-time content data...")
         context = await news_client.search_news(query)
@@ -206,7 +195,6 @@ async def run_healthcare_info(health_query: str, context: str | None) -> str:
     """Healthcare information with latest medical research"""
     llm = ChatGroq(temperature=0.2, model_name=GENERATION_MODEL)
     
-    # Get real-time medical context
     if not context and any(keyword in health_query.lower() for keyword in ["latest study", "recent findings", "medical news", "research", "clinical trial"]):
         print("Fetching latest medical research...")
         context = await news_client.get_real_time_data(health_query, "health")
@@ -229,7 +217,6 @@ async def run_tutor_logic(topic: str, mode: str, context: str | None) -> str:
     """Educational content with latest discoveries"""
     llm = ChatGroq(temperature=0.7, model_name=GENERATION_MODEL, max_tokens=600)
     
-    # Get real-time educational context
     if not context and any(keyword in topic.lower() for keyword in ["latest discovery", "recent breakthrough", "new research", "innovation"]):
         print("🎓 Fetching latest educational content...")
         context = await news_client.get_real_time_data(topic, "science")
@@ -243,7 +230,7 @@ async def run_tutor_logic(topic: str, mode: str, context: str | None) -> str:
                         "Explain '{topic}' clearly to a high school student. "
                         "Use analogies and real-world examples. Include recent developments. "
                         "End with an engaging question to test understanding.")
-    else:  # quiz mode
+    else:  
         prompt_string = (context_prompt + 
                         "Create a 3-question multiple-choice quiz about '{topic}'. "
                         "Include recent developments and discoveries. Provide detailed answer explanations.")
@@ -281,7 +268,6 @@ def run_async(coro):
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # Create a new event loop in a thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, coro)
@@ -321,7 +307,6 @@ def real_time_news_search(query: str, max_results: int = 5) -> str:
     """Get the latest news and real-time information about any topic."""
     return run_async(news_client.search_news(query, max_results))
 
-# --- Supervisor State and Graph Setup ---
 class SupervisorState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
     remaining_steps: int
@@ -335,7 +320,6 @@ supervisor_tools = [
     real_time_news_search
 ]
 
-# Enhanced supervisor prompt for better task routing
 supervisor_prompt = """You are a high-speed multi-task supervisor AI. Route user requests to the most appropriate specialist:
 
  **Available Specialists:**
@@ -370,7 +354,6 @@ async def initialize_system():
     print("Initializing Supervisor...")
     await news_client.initialize()
     
-    # Check API configurations
     apis_configured = []
     if NEWS_API_KEY:
         apis_configured.append("NewsAPI")
@@ -422,12 +405,10 @@ async def main():
             final_answer = "Sorry, I couldn't process that request."
             
             try:
-                # Stream and get final response
                 final_chunk = None
                 for chunk in supervisor_graph.stream(inputs, config=config, stream_mode="values"):
                     final_chunk = chunk
                 
-                # Extract the final answer
                 if final_chunk and "messages" in final_chunk:
                     last_message = final_chunk["messages"][-1]
                     if isinstance(last_message, ToolMessage):
@@ -462,5 +443,4 @@ if __name__ == '__main__':
         print("NEWS_API_KEY=your_newsapi_key  # Get free at https://newsapi.org/")
         print("BRAVE_API_KEY=your_brave_key   # Get at https://api.search.brave.com/")
     else:
-        # Run the main async function
         asyncio.run(main())

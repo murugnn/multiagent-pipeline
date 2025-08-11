@@ -6,3 +6,4 @@ typing_extensions
 langchain-community
 duckduckgo-search
 python-dotenv
+mcp
